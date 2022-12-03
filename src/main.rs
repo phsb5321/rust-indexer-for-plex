@@ -10,14 +10,13 @@ pub mod entities;
     author = "Hunt0k4r"
 )]
 struct Args {
-    #[arg(long, short = 'd', required = false)]
+    #[arg(long, short = 'd', required = true)]
     path_to_base_dir: String,
+    // #[arg(long, short = 't', required = false)]
+    // path_to_file_tree: String,
 
-    #[arg(long, short = 't', required = false)]
-    path_to_file_tree: String,
-
-    #[arg(long, short = 'f', required = false)]
-    path_to_destination: String,
+    // #[arg(long, short = 'f', required = false)]
+    // path_to_destination: String,
 }
 
 fn main() {

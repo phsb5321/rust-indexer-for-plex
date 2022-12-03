@@ -82,7 +82,7 @@ impl FileTree {
     ///     ]
     /// }
     ///```
-    pub fn from_string_vector(values: Vec<String>) -> FileTree {
+    pub fn new_from_string_vector(values: Vec<String>) -> FileTree {
         assert!(values.len() > 0); // Expect at least one value
 
         let mut directories = Vec::new();
@@ -135,7 +135,7 @@ impl FileTree {
                     clone_of_values.push(next_root_dix); // Add the directory to the vector
 
                     // If the directory is not in the directories vector, add it
-                    directories.push(FileTree::from_string_vector(
+                    directories.push(FileTree::new_from_string_vector(
                         clone_of_values
                             .into_iter()
                             .filter(|x| x.contains(&directory))
