@@ -2,27 +2,26 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-// #[derive(Parser)]
-// #[command(
-//     name = "RIP [ Rust Indexer for Plex ]",
-//     version = "0.0.1",
-//     author = "Hunt0k4r"
-// )]
-// struct Args {
-//     #[arg(long, short = 'd', required = false)]
-//     path_to_base_dir: String,
+#[derive(Parser)]
+#[command(
+    name = "RIP [ Rust Indexer for Plex ]",
+    version = "0.0.1",
+    author = "Hunt0k4r"
+)]
+struct Args {
+    #[arg(long, short = 'd', required = false)]
+    path_to_base_dir: String,
 
-//     #[arg(long, short = 't', required = false)]
-//     path_to_file_tree: String,
+    #[arg(long, short = 't', required = false)]
+    path_to_file_tree: String,
 
-//     #[arg(long, short = 'f', required = false)]
-//     path_to_destination: String,
-// }
+    #[arg(long, short = 'f', required = false)]
+    path_to_destination: String,
+}
 
 fn main() {
-    // let args = Args::parse();
-    let directory: String = String::from("/home/notroot/Downloads");
-    let file_tree = FileTree::new(directory);
+    let args = Args::parse();
+    let file_tree = FileTree::new(args.path_to_base_dir);
 
     // // save file tree to file
     // fs::write("file_tree.json", file_tree.get_json_string()).unwrap();
