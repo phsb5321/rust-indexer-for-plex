@@ -12,6 +12,12 @@ mod tests {
                 // Write the fille_tree to a file_tree.txt
                 let _ = fs::write("output.txt", file_tree.to_file_tree(true));
 
+                // Write file list to a file_list.txt
+                let _ = fs::write(
+                    "file_list.txt",
+                    file_tree.to_file_list(&file_tree.path).join("\n"),
+                );
+
                 // expect the file to be created
                 assert!(fs::metadata("output.txt").is_ok());
 

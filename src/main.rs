@@ -40,8 +40,9 @@ fn main() {
             path_to_base_dir,
             path_to_destination,
         } => {
-            let file_tree = FileTree::new(path_to_base_dir);
-            file_tree.generate_symbolic_links(path_to_destination, 1);
+            println!("SymLinking {} to {}", path_to_base_dir, path_to_destination);
+            let file_tree = FileTree::new_from_directory(path_to_base_dir);
+            file_tree.plex_course_sym_link(path_to_destination);
         }
     }
 }

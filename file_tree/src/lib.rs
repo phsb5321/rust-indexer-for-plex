@@ -1,7 +1,8 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::fs;
 
-use std::{fs, os::unix::fs::symlink};
+use std::{collections::HashSet, os::unix::fs::symlink};
 
 const POST_FIXES: [&str; 3] = [".mp4", ".zip", ".ts"];
 
@@ -236,16 +237,30 @@ impl FileTree {
     pub fn to_file_list(&self, prefix: &str) -> Vec<String> {
         let mut files = Vec::new();
 
-        for file in &self.files {
-            files.push(format!("{}/{}", prefix, file));
+        // create the root path and trim the start and end
+        let root_path = format!("{}{}", prefix, self.path)
+            .trim_start()
+            .trim_end()
+            .to_string();
+
+        // Push it to the files vector
+        files.push(root_path);
+
+        // For all files in the current directory, add them to the file list
+        for file in self.files.iter() {
+            let file_path = format!("{}{}", prefix, file)
+                .trim_start()
+                .trim_end()
+                .to_string();
+            files.push(file_path);
         }
 
-        for directory in &self.directories {
-            let subprefix = format!("{}/{}", prefix, directory.path);
-            files.extend(directory.to_file_list(&subprefix));
+        // For all directories in the current directory, add them to the file list
+        for directory in self.directories.iter() {
+            files.append(&mut directory.to_file_list(&format!("{}", prefix)));
         }
 
-        files
+        return files;
     }
 
     pub fn to_file_tree(&self, root: bool) -> String {
@@ -331,45 +346,91 @@ impl FileTree {
         return path.last().unwrap().to_string();
     }
 
-    pub fn generate_symbolic_links(self, destination: String, season_number: i32) {
-        let name = self.get_name();
+    pub fn plex_course_sym_link(self, destination: String) {
+        // Get file list from the file tree
+        let file_list = self.to_file_list("");
 
-        let season = format!("Season {:02}", season_number);
-        let path = format!("{}/{}", destination, season.as_str());
+        // save file list into a logs file
+        let _ = fs::write(
+            "logs.txt",
+            file_list
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join("\n"),
+        );
 
-        match fs::create_dir(&path) {
-            Ok(()) => println!("Directory created: {}", path),
-            Err(err) => {
-                println!("Error creating directory: {} -> {}", name, err);
-                return;
-            }
+        let mut season_set = HashSet::new();
+        for file in file_list.iter() {
+            let file_name_array = file.split("/").collect::<Vec<&str>>();
+            let file_name = file_name_array[file_name_array.len() - 2];
+            season_set.insert(file_name);
         }
 
-        // create a file_list variable to fold the files filtered to mp4 and sorted
-        let mut file_list = self
-            .files
-            .iter()
-            .filter(|file| file.ends_with(".mp4"))
-            .collect::<Vec<&String>>();
+        let mut season_vector = season_set.into_iter().collect::<Vec<&str>>();
 
-        // sort the files
-        file_list.sort();
+        // sort the season vector
+        season_vector.sort_by(|a, b| a.cmp(b));
 
-        // create a symbolic link for each file in the directory
-        for (index, file) in file_list.iter().enumerate() {
+        // Remove first season
+        season_vector.remove(0);
+
+        // Iterate over all seasons
+        for (i, season) in season_vector.iter().enumerate() {
+            // Get all files in the season
+            let season_file_list = file_list
+                .iter()
+                .filter(|file| file.contains(season))
+                .collect::<Vec<&String>>();
+
+            // Sort the files
+            let mut season_file_list = season_file_list
+                .iter()
+                .map(|file| file.split("/").collect::<Vec<&str>>())
+                .collect::<Vec<Vec<&str>>>();
+
+            season_file_list.sort_by(|a, b| a[a.len() - 1].cmp(b[b.len() - 1]));
+
+            // Create a symbolic link for each file in the season
+            // But change the season name to Season 01 - Season Name
+            // And the episode name to S01E01 - Episode Name
+            for (j, file) in season_file_list.iter().enumerate() {
+                let file_name = file[file.len() - 1];
+                let file_name = file_name.replace(" ", ".");
+
+                let season_name = format!("Season {} - {}", i + 1, season);
+                let episode_name = format!("S{:02}E{:02} - {}", i + 1, j + 1, file_name);
+
+                // If folders don't exist, create them
+                match fs::create_dir_all(format!("{}/{}", destination, season_name)) {
+                    Ok(()) => (),
+                    Err(e) => println!("Error creating directory: {} -> {}", season_name, e),
+                }
+
+                match symlink(
+                    &file.join("/"),
+                    format!("{}/{}/{}", destination, season_name, episode_name),
+                ) {
+                    Ok(()) => println!("Symbolic link created: {}", episode_name),
+                    Err(e) => println!("Error creating symbolic link: {} -> {}", episode_name, e),
+                }
+            }
+        }
+    }
+
+    pub fn sym_link(self, destination: String) {
+        // Get file list from the file tree
+        let file_list = self.to_file_list("");
+
+        // Create a symbolic link for each file in the destination directory
+        for file in file_list.iter() {
             let file_name_array = file.split("/").collect::<Vec<&str>>();
-            let file_name = file_name_array.last().unwrap();
+            let file_name = file_name_array[file_name_array.len() - 1];
 
-            let prefix = format!("S01E{:02} - ", index + 1);
-            match symlink(&file, format!("{}/{}{}", path, prefix, file_name)) {
+            match symlink(&file, format!("{}/{}", destination, file_name)) {
                 Ok(()) => println!("Symbolic link created: {}", file_name),
                 Err(e) => println!("Error creating symbolic link: {} -> {}", file_name, e),
             }
-        }
-
-        // create a symbolic link for each subdirectory
-        for directory in self.directories {
-            directory.generate_symbolic_links(path.clone(), season_number + 1);
         }
     }
 }
