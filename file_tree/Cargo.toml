@@ -1,5 +1,5 @@
 [package]
-name = "rust_indexer_for_plex"
+name = "file_tree"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,8 +8,7 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.0.27", features = ["derive"] }
 serde = { version = "1.0.148", features = ["derive"] }
-
-file_tree = { path="file_tree" }
+regex = "1.5.4"
 
 # serde_json is just for the example, not required in general
 serde_json = "1.0.89"
