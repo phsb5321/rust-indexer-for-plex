@@ -1,6 +1,8 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
 use std::{fs, os::unix::fs::symlink};
+
 const POST_FIXES: [&str; 3] = [".mp4", ".zip", ".ts"];
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -19,14 +21,14 @@ impl FileTree {
         }
     }
 
-    pub fn new_from_real_directory(path: String) -> FileTree {
+    pub fn new_from_directory(path: String) -> FileTree {
         let mut directories = Vec::new();
         let mut files = Vec::new();
 
         for entry in fs::read_dir(path.clone()).unwrap() {
             let entry = entry.unwrap().path().display().to_string();
             if fs::metadata(entry.clone()).unwrap().is_dir() {
-                directories.push(FileTree::new_from_real_directory(entry));
+                directories.push(FileTree::new_from_directory(entry));
             } else {
                 files.push(entry);
             }
@@ -114,10 +116,7 @@ impl FileTree {
         let depth_by_poll = Regex::new(r"│").unwrap().find_iter(line.as_str()).count();
 
         // Use Regex to count the amount of "    "
-        let depth_by_tab = Regex::new(r"    ")
-            .unwrap()
-            .find_iter(line.as_str())
-            .count();
+        let depth_by_tab = Regex::new(r"   ").unwrap().find_iter(line.as_str()).count();
 
         // Sum the depth
         let depth = depth_by_poll + depth_by_tab;
@@ -140,15 +139,15 @@ impl FileTree {
             .replace("│   ", "")
             .replace("├── ", "")
             .replace("└── ", "");
+
         file_tree_lines.remove(0); // Remove the root path from the array
 
         // Second create a new FileTree with the root path
         let mut file_tree = FileTree::new(root_path.to_string());
 
-        let mut index_list_to_trash: Vec<usize> = vec![];
-
         // Removes the file of a given file tree
-        for (i, line) in file_tree_lines.iter_mut().enumerate() {
+        let mut index_list_to_trash: Vec<usize> = vec![];
+        for (i, line) in file_tree_lines.iter().enumerate() {
             if FileTree::is_line_a_file(line.to_string()) {
                 // Get the file name
                 let file_name = line
@@ -170,10 +169,9 @@ impl FileTree {
             file_tree_lines.remove(*index);
         }
 
-        let mut avoid_lines_index: Vec<usize> = vec![];
-
         // Third, iterate over all the other lines removing the first 4 characters
-        for (i, line) in file_tree_lines.clone().iter_mut().enumerate() {
+        let mut avoid_lines_index: Vec<usize> = vec![];
+        for (i, line) in file_tree_lines.clone().iter().enumerate() {
             if avoid_lines_index.contains(&i) {
                 continue;
             }
@@ -182,7 +180,6 @@ impl FileTree {
                 // Create a new vector to hold the lines of the directory
                 let mut directory_lines: Vec<String> = Vec::new();
 
-                // Iterate over the rest of the lines and make them Strings
                 for (_, forward_line) in file_tree_lines.clone()[i + 1..].iter().enumerate() {
                     let depth = Regex::new(r"│")
                         .unwrap()
@@ -196,10 +193,12 @@ impl FileTree {
                         break;
                     }
 
-                    // Remove the first occurrence of "│  " from the line
-                    let line_to_push = forward_line.to_string().replacen("│   ", "", 1);
-
-                    directory_lines.push(line_to_push);
+                    // Remove the first occurrence of "│  " from the line if line starts with "│  "
+                    if forward_line.starts_with("│   ") {
+                        directory_lines.push(forward_line.to_string().replacen("│   ", "", 1));
+                    } else {
+                        directory_lines.push(forward_line.to_string());
+                    }
                 }
 
                 // Push root path to the directory lines
@@ -216,6 +215,13 @@ impl FileTree {
                     avoid_lines_index.push(j);
                 }
 
+                // If the first line of file_tree_lines starts with an empty space, remove four spaces from the start of each line
+                if directory_lines.len() >= 2 && directory_lines[1].starts_with("    ") {
+                    for directory_line in directory_lines.iter_mut() {
+                        *directory_line = directory_line.replacen("    ", "", 1);
+                    }
+                }
+
                 // Create a new FileTree from the directory lines
                 let directory = FileTree::new_from_file_tree(directory_lines.join("\n"));
 
@@ -227,73 +233,84 @@ impl FileTree {
         return file_tree;
     }
 
-    pub fn get_directories_list(self) -> Vec<String> {
-        // Create a new empty vector to hold the list of directories
-        let mut directories_list: Vec<String> = Vec::new();
+    pub fn to_file_list(&self, prefix: &str) -> Vec<String> {
+        let mut files = Vec::new();
 
-        // Concatenate the list of files in the current directory to the vector
-        directories_list.extend(self.files);
-
-        // Iterate through the list of subdirectories
-        for directory in self.directories {
-            // For each subdirectory, concatenate its list of files to the vector
-            directories_list.extend(directory.get_directories_list());
+        for file in &self.files {
+            files.push(format!("{}/{}", prefix, file));
         }
 
-        // Return the final list of directories
-        return directories_list;
+        for directory in &self.directories {
+            let subprefix = format!("{}/{}", prefix, directory.path);
+            files.extend(directory.to_file_list(&subprefix));
+        }
+
+        files
     }
 
-    pub fn get_formatted_file_tree(self) -> String {
-        let mut formated_file_tree: String = String::new(); // create the string
-        formated_file_tree.push_str(&self.path); // add the path to the string
+    pub fn to_file_tree(&self, root: bool) -> String {
+        let mut files: Vec<String> = Vec::new();
 
-        if self.files.iter().len() > 0 {
-            for file in self.files.iter().take(self.files.len() - 1) {
-                let num_of_spaces = self.path.split("/").count() - 1; // calculate the number of spaces
-                let file = file.replace(&self.path, ""); // remove path from file
-                formated_file_tree.push_str(&format!(
-                    "\n{}├── {}",
-                    "  ".repeat(num_of_spaces),
-                    file
-                ));
-            }
-
-            if self.files.iter().len() > 0 {
-                let num_of_spaces = self.path.split("/").count() - 1; // calculate the number of spaces
-                let file = self.files.last().unwrap().replace(&self.path, ""); // remove path from file
-                formated_file_tree.push_str(&format!(
-                    "\n{}└── {}",
-                    "  ".repeat(num_of_spaces),
-                    file
-                ));
-            }
+        if self.path == "4. Web Scraping – Extraindo dados da web" {
+            println!("root: {}", root);
         }
 
-        for directory in self.directories {
-            let num_of_spaces = self.path.split("/").count() - 1; // calculate the number of spaces
-            formated_file_tree.push_str(&format!(
-                "\n{}{}",
-                "  ".repeat(num_of_spaces),
-                directory.get_formatted_file_tree()
-            ));
+        // If its the root, add the root path to the file tree
+        if root {
+            // Add the root path to the file tree
+            files.push(self.path.clone());
         }
 
-        return formated_file_tree;
+        // For all files in the current directory, add them to the file tree
+        for (i, file) in self.files.iter().enumerate() {
+            // If its the last file, add └── to the file tree
+            if i == self.files.len() - 1 {
+                files.push(format!("└── {}", file));
+                continue;
+            }
+
+            // Else add ├── to the file tree
+            files.push(format!("├── {}", file));
+        }
+
+        // For all directories, recursively call the to_file_tree function
+        for (i, directory) in self.directories.iter().enumerate() {
+            // Get the file tree of the directory
+            let directory_file_tree = directory.to_file_tree(false);
+
+            // If its the last directory, add └── to the file tree
+            if i == self.directories.len() - 1 {
+                // Add the directory path to the file tree
+                let directory_file_tree = directory_file_tree
+                    .split("\n")
+                    .map(|x| format!("    {}", x))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+
+                // Add the directory path to the file tree
+                files.push(format!("└── {}", directory.path));
+                files.push(directory_file_tree);
+                continue;
+            }
+
+            // Add the directory path to the file tree
+            let directory_file_tree = directory_file_tree
+                .split("\n")
+                .map(|x| format!("│   {}", x))
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            // Add the directory path to the file tree
+            files.push(format!("├── {}", directory.path));
+            files.push(directory_file_tree);
+        }
+
+        return files.join("\n");
     }
 
     pub fn get_json_string(self) -> String {
         let json = serde_json::to_string(&self).unwrap();
         return json;
-    }
-
-    pub fn get_2d_vector(self) -> Vec<Vec<String>> {
-        let mut directories_list: Vec<Vec<String>> = Vec::new(); // create the vector
-        directories_list.push(self.files); // concatenate the files in the current directory to the vector
-        for directory in self.directories {
-            directories_list.push(directory.get_directories_list());
-        } // concatenate the files in the subdirectories to the vector
-        return directories_list;
     }
 
     pub fn clone(&self) -> FileTree {
