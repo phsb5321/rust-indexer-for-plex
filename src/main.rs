@@ -1,7 +1,5 @@
-use crate::entities::file_tree::FileTree;
-use clap::Parser;
-
-pub mod entities;
+use clap::{Parser, Subcommand};
+use file_tree::FileTree;
 
 #[derive(Parser)]
 #[command(
@@ -10,8 +8,11 @@ pub mod entities;
     author = "Hunt0k4r"
 )]
 struct Args {
-    #[arg(long, short = 'd', required = true)]
-    path_to_base_dir: String,
+    #[command(subcommand)]
+    action: Action,
+    // #[arg(long, short = 'd', required = true)]
+    // path_to_base_dir: String,
+
     // #[arg(long, short = 't', required = false)]
     // path_to_file_tree: String,
 
@@ -19,13 +20,28 @@ struct Args {
     // path_to_destination: String,
 }
 
+#[derive(Subcommand)]
+enum Action {
+    #[command(name = "sym-link")]
+    SymLink {
+        #[arg(long, short = 'd', required = true)]
+        path_to_base_dir: String,
+
+        #[arg(long, short = 'f', required = false)]
+        path_to_destination: String,
+    },
+}
+
 fn main() {
     let args = Args::parse();
-    let file_tree = FileTree::new(args.path_to_base_dir);
 
-    // // save file tree to file
-    // fs::write("file_tree.json", file_tree.get_json_string()).unwrap();
-
-    let formated_file_tree = file_tree.get_formatted_file_tree();
-    println!("{}", formated_file_tree);
+    match args.action {
+        Action::SymLink {
+            path_to_base_dir,
+            path_to_destination,
+        } => {
+            let file_tree = FileTree::new(path_to_base_dir);
+            file_tree.generate_symbolic_links(path_to_destination, 1);
+        }
+    }
 }
