@@ -2,9 +2,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, os::unix::fs::symlink};
 
-const POST_FIXES: [&str; 3] = [".mp4", ".zip", ".ts"];
+const POST_FIXES: [&str; 4] = [".mp4", ".zip", ".ts", ".srt"];
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FileTree {
@@ -350,16 +351,16 @@ impl FileTree {
         // Get file list from the file tree
         let file_list = self.to_file_list("");
 
-        // save file list into a logs file
-        let _ = fs::write(
-            "logs.txt",
-            file_list
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join("\n"),
-        );
+        // Remove all strings that end with / and all strings that don't end with one of the POST_FIXES
+        let file_list = file_list
+            .iter()
+            .filter(|x| {
+                !x.ends_with("/") && POST_FIXES.iter().any(|post_fix| x.ends_with(post_fix))
+            })
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>();
 
+        // Get all seasons
         let mut season_set = HashSet::new();
         for file in file_list.iter() {
             let file_name_array = file.split("/").collect::<Vec<&str>>();
@@ -372,13 +373,10 @@ impl FileTree {
         // sort the season vector
         season_vector.sort_by(|a, b| a.cmp(b));
 
-        // Remove first season
-        season_vector.remove(0);
-
         // Iterate over all seasons
         for (i, season) in season_vector.iter().enumerate() {
             // Get all files in the season
-            let season_file_list = file_list
+            let season_file_list: Vec<&String> = file_list
                 .iter()
                 .filter(|file| file.contains(season))
                 .collect::<Vec<&String>>();
@@ -389,7 +387,36 @@ impl FileTree {
                 .map(|file| file.split("/").collect::<Vec<&str>>())
                 .collect::<Vec<Vec<&str>>>();
 
+            // Get the time
+            let time_now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            // Create a log file with the time
+            let _ = fs::write(
+                format!(
+                    "logs/{} - {}.log",
+                    time_now,
+                    self.path.split("/").last().unwrap()
+                ),
+                file_list
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n"),
+            );
+
             season_file_list.sort_by(|a, b| a[a.len() - 1].cmp(b[b.len() - 1]));
+
+            let season_name = format!("Season {} - {}", i + 1, season);
+
+            // Rewrite the symlink snippet to create a directory for each season
+            // And then create a symbolic link for each episode in the season directory
+            match fs::create_dir_all(format!("{}/{}", destination, season_name)) {
+                Ok(()) => println!("Directory created: {}", season_name),
+                Err(e) => println!("Error creating directory: {} -> {}", season_name, e),
+            }
 
             // Create a symbolic link for each file in the season
             // But change the season name to Season 01 - Season Name
@@ -398,14 +425,7 @@ impl FileTree {
                 let file_name = file[file.len() - 1];
                 let file_name = file_name.replace(" ", ".");
 
-                let season_name = format!("Season {} - {}", i + 1, season);
                 let episode_name = format!("S{:02}E{:02} - {}", i + 1, j + 1, file_name);
-
-                // If folders don't exist, create them
-                match fs::create_dir_all(format!("{}/{}", destination, season_name)) {
-                    Ok(()) => (),
-                    Err(e) => println!("Error creating directory: {} -> {}", season_name, e),
-                }
 
                 match symlink(
                     &file.join("/"),
