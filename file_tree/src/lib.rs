@@ -5,7 +5,7 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, os::unix::fs::symlink};
 
-const POST_FIXES: [&str; 4] = [".mp4", ".zip", ".ts", ".srt"];
+const POST_FIXES: [&str; 1] = [".mp4"];
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FileTree {
@@ -348,85 +348,71 @@ impl FileTree {
     }
 
     pub fn plex_course_sym_link(self, destination: String) {
-        // Get file list from the file tree
+        // Get a list of all files in the current directory and its subdirectories
         let file_list = self.to_file_list("");
 
-        // Remove all strings that end with / and all strings that don't end with one of the POST_FIXES
+        // Filter the file list to only contain files with specific file extensions (as determined by POST_FIXES)
         let file_list = file_list
             .iter()
             .filter(|x| {
                 !x.ends_with("/") && POST_FIXES.iter().any(|post_fix| x.ends_with(post_fix))
             })
+            // Convert the file paths to strings
             .map(|x| x.to_string())
+            // Collect the filtered file paths into a vector of strings
             .collect::<Vec<String>>();
 
-        // Get all seasons
+        // Create a hash set to store the names of all seasons (as determined by the second-to-last directory in the file path)
         let mut season_set = HashSet::new();
         for file in file_list.iter() {
+            // Split the file path by '/' and get the second-to-last element (which should be the season name)
             let file_name_array = file.split("/").collect::<Vec<&str>>();
             let file_name = file_name_array[file_name_array.len() - 2];
+            // Insert the season name into the hash set
             season_set.insert(file_name);
         }
 
+        // Convert the hash set into a vector and sort it alphabetically
         let mut season_vector = season_set.into_iter().collect::<Vec<&str>>();
-
-        // sort the season vector
         season_vector.sort_by(|a, b| a.cmp(b));
 
-        // Iterate over all seasons
+        // Iterate through each season in the sorted vector
         for (i, season) in season_vector.iter().enumerate() {
-            // Get all files in the season
+            // Filter the file list to only contain files in the current season
             let season_file_list: Vec<&String> = file_list
                 .iter()
                 .filter(|file| file.contains(season))
                 .collect::<Vec<&String>>();
 
-            // Sort the files
+            // Split the file paths by '/'
             let mut season_file_list = season_file_list
                 .iter()
                 .map(|file| file.split("/").collect::<Vec<&str>>())
                 .collect::<Vec<Vec<&str>>>();
 
-            // Get the time
-            let time_now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            // Create a log file with the time
-            let _ = fs::write(
-                format!(
-                    "logs/{} - {}.log",
-                    time_now,
-                    self.path.split("/").last().unwrap()
-                ),
-                file_list
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n"),
-            );
-
+            // Sort the season file list alphabetically by the file name
             season_file_list.sort_by(|a, b| a[a.len() - 1].cmp(b[b.len() - 1]));
 
+            // Format the season name as "Season X - SEASON_NAME"
             let season_name = format!("Season {} - {}", i + 1, season);
 
-            // Rewrite the symlink snippet to create a directory for each season
-            // And then create a symbolic link for each episode in the season directory
+            // Try to create a directory with the formatted season name
             match fs::create_dir_all(format!("{}/{}", destination, season_name)) {
                 Ok(()) => println!("Directory created: {}", season_name),
                 Err(e) => println!("Error creating directory: {} -> {}", season_name, e),
             }
 
-            // Create a symbolic link for each file in the season
-            // But change the season name to Season 01 - Season Name
-            // And the episode name to S01E01 - Episode Name
+            // Iterate through each file in the sorted season file list
             for (j, file) in season_file_list.iter().enumerate() {
+                // Get the file name from the file path
                 let file_name = file[file.len() - 1];
+                // Replace spaces in the file name with periods
                 let file_name = file_name.replace(" ", ".");
 
+                // Format the episode name as "SXXEYY - FILE_NAME"
                 let episode_name = format!("S{:02}E{:02} - {}", i + 1, j + 1, file_name);
 
+                // Try to create a symbolic link to the file with the formatted episode name
                 match symlink(
                     &file.join("/"),
                     format!("{}/{}/{}", destination, season_name, episode_name),
@@ -442,14 +428,69 @@ impl FileTree {
         // Get file list from the file tree
         let file_list = self.to_file_list("");
 
-        // Create a symbolic link for each file in the destination directory
-        for file in file_list.iter() {
-            let file_name_array = file.split("/").collect::<Vec<&str>>();
-            let file_name = file_name_array[file_name_array.len() - 1];
+        // Filter the file list to only contain files with specific
+        // file extensions (as determined by POST_FIXES)
+        let file_list = file_list
+            .iter()
+            .filter(|x| {
+                !x.ends_with("/") && POST_FIXES.iter().any(|post_fix| x.ends_with(post_fix))
+            })
+            // Convert the file paths to strings
+            .map(|x| x.to_string())
+            // Collect the filtered file paths into a vector of strings
+            .collect::<Vec<String>>();
 
-            match symlink(&file, format!("{}/{}", destination, file_name)) {
-                Ok(()) => println!("Symbolic link created: {}", file_name),
-                Err(e) => println!("Error creating symbolic link: {} -> {}", file_name, e),
+        // Create a hash set to store the names of all chapters
+        //  (as determined by the second-to-last directory in the file path)
+        let mut chapter_set = HashSet::new();
+        for file in file_list.iter() {
+            // Split the file path by '/' and get the second-to-last element (which should be the season name)
+            let file_name_array = file.split("/").collect::<Vec<&str>>();
+            let file_name = file_name_array[file_name_array.len() - 2];
+            // Insert the chapter name into the hash set
+            chapter_set.insert(file_name);
+        }
+
+        // Convert the hash set into a vector and sort it alphabetically
+        let mut chapter_vector = chapter_set.into_iter().collect::<Vec<&str>>();
+        chapter_vector.sort_by(|a, b| a.cmp(b));
+
+        // Iterate through each chapter in the sorted vector
+        for (i, chapter) in chapter_vector.iter().enumerate() {
+            // Filter the file list to only contain files in the current chapter
+            let chapter_file_list: Vec<&String> = file_list
+                .iter()
+                .filter(|file| file.contains(chapter))
+                .collect::<Vec<&String>>();
+
+            // Split the file paths by '/'
+            let mut chapter_file_list = chapter_file_list
+                .iter()
+                .map(|file| file.split("/").collect::<Vec<&str>>())
+                .collect::<Vec<Vec<&str>>>();
+
+            // Sort the chapter file list alphabetically by the file name
+            chapter_file_list.sort_by(|a, b| a[a.len() - 1].cmp(b[b.len() - 1]));
+
+            // Try to create a directory with the formatted season name
+            match fs::create_dir_all(format!("{}/{}", destination, chapter)) {
+                Ok(()) => println!("Directory created: {}", chapter),
+                Err(e) => println!("Error creating directory: {} -> {}", chapter, e),
+            }
+
+            // Iterate through each file in the sorted season file list
+            for file in chapter_file_list.iter() {
+                // Get the file name from the file path
+                let file_name = file[file.len() - 1];
+
+                // Try to create a symbolic link to the file with the formatted episode name
+                match symlink(
+                    &file.join("/"),
+                    format!("{}/{}/{}", destination, chapter, file_name),
+                ) {
+                    Ok(()) => println!("Symbolic link created: {}", file_name),
+                    Err(e) => println!("Error creating symbolic link: {} -> {}", file_name, e),
+                }
             }
         }
     }
