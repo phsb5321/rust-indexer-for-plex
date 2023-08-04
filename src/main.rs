@@ -21,9 +21,6 @@ enum Action {
 
         #[arg(long, short = 'f', required = false)]
         path_to_destination: String,
-
-        #[arg(long, short = 'p', required = false)]
-        use_plex_folder_structure: bool,
     },
 }
 
@@ -34,21 +31,10 @@ fn main() {
         Action::SymLink {
             path_to_base_dir,
             path_to_destination,
-            use_plex_folder_structure,
         } => {
             println!("SymLinking {} to {}", path_to_base_dir, path_to_destination);
-            let file_tree = FileTree::from_directory(path_to_base_dir);
-            let grouping_type = match use_plex_folder_structure {
-                true => {
-                    println!("Using PLEX Folder Structure");
-                    "Season"
-                }
-                false => {
-                    println!("Using Default Folder Structure");
-                    "Chapter"
-                }
-            };
-            file_tree.create_grouped_symlinks(path_to_destination, grouping_type);
+            let file_tree = FileTree::from_directory(path_to_base_dir.to_string(), 1);
+            file_tree.create_grouped_symlinks(path_to_destination.to_string());
         }
     }
 }
