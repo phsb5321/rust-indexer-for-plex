@@ -1,11 +1,13 @@
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use serde_json::json;
+use std::fs::{self, read_dir, ReadDir};
+use std::os::unix::fs::symlink;
+use std::path::Path;
 
-use std::{collections::HashSet, os::unix::fs::symlink};
+// Constant to store postfixes
+const POST_FIXES: [&str; 1] = [".mp4"];
 
-const POST_FIXES: [&str; 3] = [".mp4", ".zip", ".ts"];
-
+/// Represents a tree structure for files
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FileTree {
     pub path: String,
@@ -13,424 +15,418 @@ pub struct FileTree {
     pub directories: Vec<FileTree>,
 }
 
+/// Struct FileTree Implementation
 impl FileTree {
-    pub fn new(path: String) -> FileTree {
-        FileTree {
+    /// Constructor for the FileTree struct. Initializes a new FileTree with
+    /// the specified path. Note that the `files` and `directories` fields
+    /// are initialized as empty vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - A string slice that holds the path to the file tree.
+    ///
+    /// # Returns
+    ///
+    /// * A new instance of `Self` (FileTree).
+    pub fn new(path: String) -> Self {
+        Self {
             path,
             files: Vec::new(),
             directories: Vec::new(),
         }
     }
 
-    pub fn new_from_directory(path: String) -> FileTree {
-        let mut directories = Vec::new();
-        let mut files = Vec::new();
+    /// Converts the current FileTree instance to a JSON string.
+    ///
+    /// # Returns
+    ///
+    /// * A JSON-formatted string representation of the FileTree instance.
+    pub fn to_json(&self) -> String {
+        json!(self).to_string()
+    }
 
-        for entry in fs::read_dir(path.clone()).unwrap() {
-            let entry = entry.unwrap().path().display().to_string();
-            if fs::metadata(entry.clone()).unwrap().is_dir() {
-                directories.push(FileTree::new_from_directory(entry));
-            } else {
-                files.push(entry);
-            }
-        }
+    /// Returns the last component of the FileTree's path, effectively giving the name of the FileTree.
+    ///
+    /// # Returns
+    ///
+    /// * A string representing the name of the FileTree.
+    pub fn name(&self) -> String {
+        self.path.split("/").last().unwrap().to_string()
+    }
 
-        FileTree {
+    /// Constructs a new instance of FileTree by reading and processing a directory path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the directory to be processed.
+    ///
+    /// # Returns
+    ///
+    /// * A new instance of `Self` (FileTree) containing the file tree from the given directory.
+    pub fn from_directory(path: String) -> Self {
+        let entries = fs::read_dir(&path).unwrap();
+        let (files, dirs) = partition_entries(entries);
+        Self {
             path,
             files,
-            directories,
+            directories: dirs.into_iter().map(Self::from_directory).collect(),
         }
     }
 
-    pub fn new_from_string_vector(values: Vec<String>) -> FileTree {
-        assert!(values.len() > 0); // Expect at least one value
-
-        let mut directories = Vec::new();
-        let mut files = Vec::new();
-
-        // Order the vector by length
-        let mut values = values;
-        values.sort_by(|a, b| a.len().cmp(&b.len()));
-
-        // Use the first value as the root path ad remove it from the vector
-        // if the root path ends with a slash, remove it
-        let root_path = values.remove(0);
-        let root_path = if root_path.ends_with("/") {
-            root_path[..root_path.len() - 1].to_string()
-        } else {
-            root_path
-        };
-
-        // Iterate over the vector and add the values to the FileTree
-        for entry in values.clone() {
-            let mut clone_of_values = values.clone(); // Clone the vector to prevent borrowing issues
-
-            let entry_clone = entry.replace(&root_path, ""); // Remove the root path from the entry
-            let entry_split: Vec<&str> = entry_clone
-                .split("/") // Split the entry by slashes
-                .into_iter() // Convert the iterator to a vector
-                .filter(|&x| x != "") // Remove empty strings
-                .collect(); // Collect the iterator to a vector
-
-            // If the entry is a file, add it to the files vector
-            if entry_split.len() == 1 {
-                files.push(entry);
-            } else {
-                let directory = entry_split[0].to_string(); // Get the directory name
-
-                // Check if the directory is already in the directories vector
-                if !directories
-                    .iter()
-                    .any(|x: &FileTree| x.path == format!("{}/{}", root_path, directory))
-                {
-                    let next_root_dix = format!("{}/{}", root_path, directory); // Get the next root path
-
-                    // if the root dir does not start with a slash, add one
-                    let next_root_dix = if !next_root_dix.starts_with("/") {
-                        format!("/{}", next_root_dix)
-                    } else {
-                        next_root_dix
-                    };
-
-                    clone_of_values.push(next_root_dix); // Add the directory to the vector
-
-                    // If the directory is not in the directories vector, add it
-                    directories.push(FileTree::new_from_string_vector(
-                        clone_of_values
-                            .into_iter()
-                            .filter(|x| x.contains(&directory))
-                            .collect(),
-                    ));
-                }
-            }
-        }
-
-        return FileTree {
+    /// Constructs a new instance of FileTree by processing a vector of paths represented as strings.
+    ///
+    /// # Arguments
+    ///
+    /// * `values` - Vector of strings, each representing a path in the file tree.
+    ///
+    /// # Returns
+    ///
+    /// * A new instance of `Self` (FileTree) constructed from the provided paths.
+    ///
+    /// # Panics
+    ///
+    /// * If the `values` vector is empty.
+    pub fn from_string_vector(values: Vec<String>) -> Self {
+        assert!(!values.is_empty(), "Expect at least one value");
+        let (root_path, values) = prepare_paths(values);
+        let (files, directories) = process_paths(root_path.clone(), values);
+        Self {
             path: root_path,
             files,
             directories,
-        };
+        }
     }
 
-    fn is_line_a_file(line: String) -> bool {
-        // Use Regex to count the amount of "│"
-        let depth_by_poll = Regex::new(r"│").unwrap().find_iter(line.as_str()).count();
-
-        // Use Regex to count the amount of "    "
-        let depth_by_tab = Regex::new(r"   ").unwrap().find_iter(line.as_str()).count();
-
-        // Sum the depth
-        let depth = depth_by_poll + depth_by_tab;
-
-        // Test the line if it ends with one of POST_FIXES
-        if POST_FIXES.iter().any(|&x| line.ends_with(x)) && depth == 0 {
-            return true;
+    /// Constructs a new instance of FileTree by processing a string representation of a FileTree.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_tree` - A string representing a file tree.
+    ///
+    /// # Returns
+    ///
+    /// * A new instance of `Self` (FileTree) constructed from the provided string.
+    pub fn from_file_tree(file_tree: String) -> Self {
+        let (root_path, lines) = prepare_file_tree_lines(file_tree);
+        let (files, directories) = process_file_and_dir_lines(lines);
+        Self {
+            path: root_path,
+            files,
+            directories,
         }
-
-        return false;
     }
 
-    pub fn new_from_file_tree(file_tree: String) -> FileTree {
-        // First create an array with the lines of the file tree
-        let mut file_tree_lines: Vec<String> = file_tree.lines().map(|x| x.to_string()).collect();
-
-        // Then, get the root path that is the first line by splicing the array
-        let root_path = file_tree_lines[0]
-            .to_string()
-            .replace("│   ", "")
-            .replace("├── ", "")
-            .replace("└── ", "");
-
-        file_tree_lines.remove(0); // Remove the root path from the array
-
-        // Second create a new FileTree with the root path
-        let mut file_tree = FileTree::new(root_path.to_string());
-
-        // Removes the file of a given file tree
-        let mut index_list_to_trash: Vec<usize> = vec![];
-        for (i, line) in file_tree_lines.iter().enumerate() {
-            if FileTree::is_line_a_file(line.to_string()) {
-                // Get the file name
-                let file_name = line
-                    .to_string()
-                    .replace("│   ", "")
-                    .replace("├── ", "")
-                    .replace("└── ", "");
-
-                // Add the file to the file tree
-                file_tree.files.push(file_name);
-
-                // Add the index to the list of indexes to trash
-                index_list_to_trash.push(i);
-            }
-        }
-
-        // Remove the files from the file_tree_lines vector
-        for index in index_list_to_trash.iter().rev() {
-            file_tree_lines.remove(*index);
-        }
-
-        // Third, iterate over all the other lines removing the first 4 characters
-        let mut avoid_lines_index: Vec<usize> = vec![];
-        for (i, line) in file_tree_lines.clone().iter().enumerate() {
-            if avoid_lines_index.contains(&i) {
-                continue;
-            }
-
-            if line.starts_with("├──") || line.starts_with("└──") {
-                // Create a new vector to hold the lines of the directory
-                let mut directory_lines: Vec<String> = Vec::new();
-
-                for (_, forward_line) in file_tree_lines.clone()[i + 1..].iter().enumerate() {
-                    let depth = Regex::new(r"│")
-                        .unwrap()
-                        .find_iter(forward_line.as_str())
-                        .count();
-
-                    if (forward_line.to_string().starts_with("├──")
-                        || forward_line.to_string().starts_with("└──"))
-                        && depth == 0
-                    {
-                        break;
-                    }
-
-                    // Remove the first occurrence of "│  " from the line if line starts with "│  "
-                    if forward_line.starts_with("│   ") {
-                        directory_lines.push(forward_line.to_string().replacen("│   ", "", 1));
-                    } else {
-                        directory_lines.push(forward_line.to_string());
-                    }
-                }
-
-                // Push root path to the directory lines
-                directory_lines.insert(
-                    0,
-                    file_tree_lines[i]
-                        .to_string()
-                        .replace("├── ", "")
-                        .replace("└── ", ""),
-                );
-
-                // Instead of removing the lines, add the indexes to the avoid_lines_index vector
-                for j in i..i + directory_lines.len() {
-                    avoid_lines_index.push(j);
-                }
-
-                // If the first line of file_tree_lines starts with an empty space, remove four spaces from the start of each line
-                if directory_lines.len() >= 2 && directory_lines[1].starts_with("    ") {
-                    for directory_line in directory_lines.iter_mut() {
-                        *directory_line = directory_line.replacen("    ", "", 1);
-                    }
-                }
-
-                // Create a new FileTree from the directory lines
-                let directory = FileTree::new_from_file_tree(directory_lines.join("\n"));
-
-                // Add the directory to the directories vector
-                file_tree.directories.push(directory);
-            }
-        }
-
-        return file_tree;
-    }
-
+    /// Converts the FileTree to a vector of strings representing all files in the file tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `prefix` - A string to be prepended to each file in the list.
+    ///
+    /// # Returns
+    ///
+    /// * A vector of strings, each representing a file in the file tree, prefixed with `prefix`.
     pub fn to_file_list(&self, prefix: &str) -> Vec<String> {
-        let mut files = Vec::new();
-
-        // create the root path and trim the start and end
-        let root_path = format!("{}{}", prefix, self.path)
-            .trim_start()
-            .trim_end()
-            .to_string();
-
-        // Push it to the files vector
-        files.push(root_path);
-
-        // For all files in the current directory, add them to the file list
-        for file in self.files.iter() {
-            let file_path = format!("{}{}", prefix, file)
-                .trim_start()
-                .trim_end()
-                .to_string();
-            files.push(file_path);
-        }
-
-        // For all directories in the current directory, add them to the file list
-        for directory in self.directories.iter() {
-            files.append(&mut directory.to_file_list(&format!("{}", prefix)));
-        }
-
-        return files;
-    }
-
-    pub fn to_file_tree(&self, root: bool) -> String {
-        let mut files: Vec<String> = Vec::new();
-
-        if self.path == "4. Web Scraping – Extraindo dados da web" {
-            println!("root: {}", root);
-        }
-
-        // If its the root, add the root path to the file tree
-        if root {
-            // Add the root path to the file tree
-            files.push(self.path.clone());
-        }
-
-        // For all files in the current directory, add them to the file tree
-        for (i, file) in self.files.iter().enumerate() {
-            // If its the last file, add └── to the file tree
-            if i == self.files.len() - 1 {
-                files.push(format!("└── {}", file));
-                continue;
-            }
-
-            // Else add ├── to the file tree
-            files.push(format!("├── {}", file));
-        }
-
-        // For all directories, recursively call the to_file_tree function
-        for (i, directory) in self.directories.iter().enumerate() {
-            // Get the file tree of the directory
-            let directory_file_tree = directory.to_file_tree(false);
-
-            // If its the last directory, add └── to the file tree
-            if i == self.directories.len() - 1 {
-                // Add the directory path to the file tree
-                let directory_file_tree = directory_file_tree
-                    .split("\n")
-                    .map(|x| format!("    {}", x))
-                    .collect::<Vec<String>>()
-                    .join("\n");
-
-                // Add the directory path to the file tree
-                files.push(format!("└── {}", directory.path));
-                files.push(directory_file_tree);
-                continue;
-            }
-
-            // Add the directory path to the file tree
-            let directory_file_tree = directory_file_tree
-                .split("\n")
-                .map(|x| format!("│   {}", x))
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            // Add the directory path to the file tree
-            files.push(format!("├── {}", directory.path));
-            files.push(directory_file_tree);
-        }
-
-        return files.join("\n");
-    }
-
-    pub fn get_json_string(self) -> String {
-        let json = serde_json::to_string(&self).unwrap();
-        return json;
-    }
-
-    pub fn clone(&self) -> FileTree {
-        let mut new_file_tree = FileTree {
-            path: self.path.clone(),
-            files: self.files.clone(),
-            directories: Vec::new(),
-        };
-        for directory in self.directories.iter() {
-            new_file_tree.directories.push(directory.clone());
-        }
-        return new_file_tree;
-    }
-
-    pub fn get_name(&self) -> String {
-        let path = self.path.clone();
-        let path = path.split("/").collect::<Vec<&str>>();
-        return path.last().unwrap().to_string();
-    }
-
-    pub fn plex_course_sym_link(self, destination: String) {
-        // Get file list from the file tree
-        let file_list = self.to_file_list("");
-
-        // save file list into a logs file
-        let _ = fs::write(
-            "logs.txt",
-            file_list
+        let mut files = vec![format!("{}{}", prefix, self.path.trim())];
+        files.extend(
+            self.files
                 .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join("\n"),
+                .map(|file| format!("{}{}", prefix, file.trim())),
         );
-
-        let mut season_set = HashSet::new();
-        for file in file_list.iter() {
-            let file_name_array = file.split("/").collect::<Vec<&str>>();
-            let file_name = file_name_array[file_name_array.len() - 2];
-            season_set.insert(file_name);
-        }
-
-        let mut season_vector = season_set.into_iter().collect::<Vec<&str>>();
-
-        // sort the season vector
-        season_vector.sort_by(|a, b| a.cmp(b));
-
-        // Remove first season
-        season_vector.remove(0);
-
-        // Iterate over all seasons
-        for (i, season) in season_vector.iter().enumerate() {
-            // Get all files in the season
-            let season_file_list = file_list
+        files.extend(
+            self.directories
                 .iter()
-                .filter(|file| file.contains(season))
-                .collect::<Vec<&String>>();
+                .flat_map(|directory| directory.to_file_list(&prefix)),
+        );
+        files
+    }
 
-            // Sort the files
-            let mut season_file_list = season_file_list
+    /// Converts the FileTree to a string representation of the tree of files.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - A boolean indicating whether this FileTree instance is the root of the file tree.
+    ///
+    /// # Returns
+    ///
+    /// * A string representing the tree of files.
+    pub fn to_file_tree(&self, root: bool) -> String {
+        let mut file_tree = if root {
+            vec![self.path.clone()]
+        } else {
+            vec![]
+        };
+        file_tree.extend(
+            self.files
                 .iter()
-                .map(|file| file.split("/").collect::<Vec<&str>>())
-                .collect::<Vec<Vec<&str>>>();
+                .enumerate()
+                .map(|(i, file)| format_file(i, file)),
+        );
+        file_tree.extend(
+            self.directories
+                .iter()
+                .enumerate()
+                .flat_map(|(i, directory)| format_directory(i, directory)),
+        );
+        file_tree.join("\n")
+    }
 
-            season_file_list.sort_by(|a, b| a[a.len() - 1].cmp(b[b.len() - 1]));
+    /// Creates symlinks for files grouped by the provided criteria, inside the provided destination directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - Consumes the instance, as we're done with it after this operation.
+    /// * `destination` - The directory where the symlinks will be created.
+    /// * `grouping_type` - The criteria to use for grouping the files.
+    ///
+    /// # Note
+    ///
+    /// This function only creates symlinks for files that have a postfix contained in the POST_FIXES array.
+    pub fn create_grouped_symlinks(self, destination: String, grouping_type: &str) {
+        // We generate a list of files which meet our criteria using depth-first search.
+        let file_list: Vec<String> = generate_file_list(&Path::new(&self.path), &POST_FIXES);
 
-            // Create a symbolic link for each file in the season
-            // But change the season name to Season 01 - Season Name
-            // And the episode name to S01E01 - Episode Name
-            for (j, file) in season_file_list.iter().enumerate() {
-                let file_name = file[file.len() - 1];
-                let file_name = file_name.replace(" ", ".");
+        // We then generate the unique group names based on our file list.
+        let group_names: Vec<String> = get_sorted_group_names(file_list.clone());
 
-                let season_name = format!("Season {} - {}", i + 1, season);
-                let episode_name = format!("S{:02}E{:02} - {}", i + 1, j + 1, file_name);
+        // For each group, we create a directory in the destination, and create
+        // symlinks for all the files in that group.
+        for (group_index, group) in group_names.iter().enumerate() {
+            // Formatting the name of the group directory with its index.
+            let group_dir = format_group_dir(group_index, &group, grouping_type);
 
-                // If folders don't exist, create them
-                match fs::create_dir_all(format!("{}/{}", destination, season_name)) {
-                    Ok(()) => (),
-                    Err(e) => println!("Error creating directory: {} -> {}", season_name, e),
-                }
+            // Attempt to create a new directory with the group directory name.
+            // If this fails, log an error and skip to the next iteration of the loop.
+            if let Err(error) = fs::create_dir_all(format!("{}/{}", destination, group_dir)) {
+                println!("Error creating directory: {} -> {}", group_dir, error);
+                continue;
+            }
 
-                match symlink(
-                    &file.join("/"),
-                    format!("{}/{}/{}", destination, season_name, episode_name),
+            // Retrieve the files that belong to the current group.
+            let group_files = get_sorted_group_files(file_list.clone(), &group);
+
+            // Create a symbolic link for each file in the group.
+            for (file_index, file) in group_files.iter().enumerate() {
+                // Format the name of the link with its index and the grouping type.
+                let link_name = format_link_name(group_index, file_index, file, grouping_type);
+
+                // Attempt to create the symlink. If this fails, log an error.
+                if let Err(error) = symlink(
+                    &file,
+                    format!("{}/{}/{}", destination, group_dir, link_name),
                 ) {
-                    Ok(()) => println!("Symbolic link created: {}", episode_name),
-                    Err(e) => println!("Error creating symbolic link: {} -> {}", episode_name, e),
+                    println!("Error creating symbolic link: {} -> {}", link_name, error);
                 }
             }
         }
     }
+}
 
-    pub fn sym_link(self, destination: String) {
-        // Get file list from the file tree
-        let file_list = self.to_file_list("");
+// Helper functions
 
-        // Create a symbolic link for each file in the destination directory
-        for file in file_list.iter() {
-            let file_name_array = file.split("/").collect::<Vec<&str>>();
-            let file_name = file_name_array[file_name_array.len() - 1];
+/// Partition the entries of a directory into files and directories.
+///
+/// This function takes a `ReadDir` iterator (which is a result of the `read_dir` function from `std::fs`)
+/// and returns a tuple of two `Vec<String>`. The first vector contains the paths to files and
+/// the second vector contains the paths to directories.
+fn partition_entries(entries: ReadDir) -> (Vec<String>, Vec<String>) {
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().display().to_string())
+        .partition(|entry| fs::metadata(entry).unwrap().is_dir())
+}
 
-            match symlink(&file, format!("{}/{}", destination, file_name)) {
-                Ok(()) => println!("Symbolic link created: {}", file_name),
-                Err(e) => println!("Error creating symbolic link: {} -> {}", file_name, e),
+/// Prepares and sorts paths.
+///
+/// This function sorts a vector of paths by their length and removes the root path from the vector,
+/// returning it alongside the modified vector.
+fn prepare_paths(mut values: Vec<String>) -> (String, Vec<String>) {
+    values.sort_by_key(|a| a.len());
+    let root_path = values.remove(0).trim_end_matches('/').to_string();
+    (root_path, values)
+}
+
+/// Processes paths into files and directories.
+///
+/// This function takes the root path and a vector of paths, and separates them into files and directories,
+/// returning them as a tuple. The root path is used to differentiate between files and directories in a hierarchical manner.
+fn process_paths(root_path: String, values: Vec<String>) -> (Vec<String>, Vec<FileTree>) {
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+
+    for entry in &values {
+        let entry_clone = entry.replace(&root_path, "");
+        let entry_split: Vec<&str> = entry_clone.split('/').filter(|x| !x.is_empty()).collect();
+
+        if entry_split.len() == 1 {
+            files.push(entry.clone());
+        } else {
+            let directory = entry_split[0];
+            if directories
+                .iter()
+                .all(|x: &FileTree| x.path != format!("{}/{}", root_path, directory))
+            {
+                let next_root_dix = format!("{}/{}", root_path, directory.trim_start_matches('/'));
+                directories.push(FileTree::from_string_vector(
+                    values
+                        .iter()
+                        .filter(|x| x.contains(&next_root_dix))
+                        .cloned()
+                        .collect(),
+                ));
             }
         }
     }
+
+    (files, directories)
+}
+
+/// Prepares lines from a FileTree represented as string.
+///
+/// This function takes a string representation of a FileTree and splits it into separate lines,
+/// returning the root path and a vector of the other lines.
+fn prepare_file_tree_lines(file_tree: String) -> (String, Vec<String>) {
+    let mut lines: Vec<String> = file_tree.lines().map(String::from).collect();
+    let root_path = lines.remove(0);
+    (root_path, lines)
+}
+
+/// Processes lines into files and directories.
+///
+/// This function takes a vector of lines representing a file tree and separates them into files and directories,
+/// returning them as a tuple.
+fn process_file_and_dir_lines(lines: Vec<String>) -> (Vec<String>, Vec<FileTree>) {
+    let (files, dirs) = filter_files(lines);
+    let directories = process_directory_lines(dirs);
+    (files, directories)
+}
+
+/// Filters lines into files and directories.
+///
+/// This function takes a vector of lines and separates them into files and directories, returning them as a tuple.
+fn filter_files(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
+    lines
+        .into_iter()
+        .partition(|line| fs::metadata(line).unwrap().is_file())
+}
+
+/// Processes lines into directory FileTrees.
+///
+/// This function takes a vector of lines representing directories and transforms each one into a FileTree,
+/// returning a vector of the results.
+fn process_directory_lines(lines: Vec<String>) -> Vec<FileTree> {
+    lines
+        .into_iter()
+        .filter(|line| fs::metadata(line).unwrap().is_dir())
+        .map(|line| FileTree::from_directory(line))
+        .collect()
+}
+
+/// Formats a file line with its index.
+fn format_file(i: usize, file: &String) -> String {
+    format!("File {}: {}", i + 1, file)
+}
+
+/// Formats a directory line with its index.
+fn format_directory(i: usize, directory: &FileTree) -> Vec<String> {
+    vec![format!(
+        "Directory {}: {}",
+        i + 1,
+        directory.to_file_tree(false)
+    )]
+}
+
+/// Gets sorted group names from a file list.
+fn get_sorted_group_names(file_list: Vec<String>) -> Vec<String> {
+    let mut group_names: Vec<String> = file_list
+        .iter()
+        .map(|file| file.split('/').last().unwrap().to_string())
+        .collect();
+    group_names.sort();
+    group_names
+}
+
+/// Formats a group directory name with its index.
+fn format_group_dir(i: usize, group: &str, grouping_type: &str) -> String {
+    format!("{} {} - {}", grouping_type, i + 1, group)
+}
+
+/// Gets sorted group files from a file list.
+fn get_sorted_group_files(file_list: Vec<String>, group: &str) -> Vec<String> {
+    let mut group_files: Vec<String> = file_list
+        .into_iter()
+        .filter(|file| file.contains(group))
+        .collect();
+    group_files.sort();
+    group_files
+}
+
+/// Formats a link name with its index.
+fn format_link_name(i: usize, j: usize, file: &String, grouping_type: &str) -> String {
+    let file_name = file.split('/').last().unwrap();
+    format!(
+        "{} {} - File {} - {}",
+        grouping_type,
+        i + 1,
+        j + 1,
+        file_name
+    )
+}
+
+// The function generate_file_list is designed to generate a list of all files in a given directory structure.
+// It operates recursively, so it's able to traverse subdirectories as well as the top level directory.
+// Files are added to the list in a depth-first order, preserving the original order of files in each directory.
+// The function only includes files whose names end with one of the specified postfixes.
+fn generate_file_list(path: &Path, postfixes: &[&str]) -> Vec<String> {
+    // Initialize an empty vector to store the file list.
+    let mut file_list = vec![];
+
+    // Check if the given path is a directory.
+    if path.is_dir() {
+        // If it is, attempt to read the directory. This returns a Result type which is an Ok variant if the operation succeeded,
+        // and contains an iterator over the entries within the directory.
+        if let Ok(entries) = read_dir(path) {
+            // For each entry in the directory...
+            for entry in entries {
+                // Attempt to unwrap the entry. If it's valid (i.e., if this is an Ok variant of the Result type)...
+                if let Ok(entry) = entry {
+                    // Get the path to the entry.
+                    let file_path = entry.path();
+
+                    // Check if the file path ends with one of the specified postfixes and not ends with "/"
+                    // This will be true for all valid files and false for directories and invalid files.
+                    let is_valid_file = !file_path.ends_with("/")
+                        && postfixes
+                        .iter()
+                        .any(|post_fix| file_path.ends_with(post_fix));
+
+                    // If the entry is a valid file...
+                    if is_valid_file {
+                        // Convert the file path to a string and add it to the file list.
+                        file_list.push(file_path.to_string_lossy().into_owned());
+                    }
+                    // If the entry is a directory...
+                    else if file_path.is_dir() {
+                        // Call generate_file_list recursively to get a list of files from the subdirectory,
+                        // and add those files to the file list.
+                        file_list.extend(generate_file_list(&file_path, postfixes));
+                    }
+                }
+            }
+        }
+    }
+    // If the given path is a file (not a directory)...
+    else if path.is_file() {
+        // Check if the file ends with one of the specified postfixes and not ends with "/"
+        let is_valid_file =
+            !path.ends_with("/") && postfixes.iter().any(|post_fix| path.ends_with(post_fix));
+
+        // If the file is valid...
+        if is_valid_file {
+            // Convert the file path to a string and add it to the file list.
+            file_list.push(path.to_string_lossy().into_owned());
+        }
+    }
+
+    // Return the file list.
+    file_list
 }
