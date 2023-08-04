@@ -12,3 +12,4 @@ regex = "1.5.4"
 
 # serde_json is just for the example, not required in general
 serde_json = "1.0.89"
+tempfile = "3.7.0"

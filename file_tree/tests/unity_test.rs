@@ -7,7 +7,7 @@ mod tests {
     fn test_get_formatted_file_tree() {
         match fs::read_to_string("tests/input.txt") {
             Ok(contents) => {
-                let file_tree = FileTree::new_from_file_tree(contents);
+                let file_tree = FileTree::from_file_tree(contents);
 
                 // Write the fille_tree to a file_tree.txt
                 let _ = fs::write("tests/output.txt", file_tree.to_file_tree(true));
